@@ -10,17 +10,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-none-eabi bison flex libssl-dev bc libgnutls28-dev uuid-dev e2fsprogs
+          sudo apt-get install -y gcc-aarch64-linux-gnu bison flex libssl-dev bc libgnutls28-dev uuid-dev e2fsprogs wget
 
-      - name: Clone repositories
+      - name: Clone and Compile Custom U-Boot
         run: |
-          git clone --depth 1 https://github.com/msm8916-mainline/lk2nd.git
-          git clone --depth 1 https://github.com/msm8916-mainline/qhypstub.git
           git clone --depth 1 https://github.com/u-boot/u-boot.git
-          git clone --depth 1 https://github.com/msm8916-mainline/gen-uboot-img.git
-
-      - name: Patch U-Boot Config
-        run: |
           cd u-boot
           make CROSS_COMPILE=aarch64-linux-gnu- qcom_defconfig
           sed -i '/CONFIG_BOOTCOMMAND/d' .config
@@ -28,14 +22,36 @@ jobs:
           echo 'CONFIG_BOOTDELAY=0' >> .config
           echo 'CONFIG_BOOTCOMMAND="load mmc 0:25 0x80000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x80000000"' >> .config
           make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- u-boot-nodtb.bin
+          gzip -9 -c u-boot-nodtb.bin > ../u-boot-nodtb.bin.gz
+          cd ..
 
-      - name: Build with gen-uboot-img
+      - name: Package Complete combined.img
         run: |
-          cd gen-uboot-img
-          make -j$(nproc) LK2ND_DIR=../lk2nd QHYPSTUB_DIR=../qhypstub UBOOT_DIR=../u-boot
+          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
+          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/qhypstub.bin
+          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
+
+          mkdir -p /tmp/thirdstage
+          sudo mount -o loop thirdstage.ext2 /tmp/thirdstage
+          mkdir -p build_stage
+          cp -a /tmp/thirdstage/* build_stage/
+          sudo umount /tmp/thirdstage
+
+          cp u-boot-nodtb.bin.gz build_stage/
+
+          # Pack new thirdstage with 4K block size
+          mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 8M
+
+          # Assemble combined.img
+          cp lk2nd.img combined.img
+          truncate -s 508K combined.img
+          cat qhypstub.bin >> combined.img
+          truncate -s 512K combined.img
+          cat new_thirdstage.ext2 >> combined.img
 
       - name: Upload Combined Image
         uses: actions/upload-artifact@v4
         with:
           name: combined-efi-a6000
-          path: gen-uboot-img/build/combined.img
+          path: combined.img
