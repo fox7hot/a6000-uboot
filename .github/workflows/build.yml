@@ -20,8 +20,7 @@ jobs:
           sed -i '/CONFIG_BOOTCOMMAND/d' .config
           sed -i '/CONFIG_BOOTDELAY/d' .config
           echo 'CONFIG_BOOTDELAY=0' >> .config
-          echo 'CONFIG_BOOTCOMMAND="load mmc 0:25 0x80000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x80000000"' >> .config
-          make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+echo 'CONFIG_BOOTCOMMAND="load mmc 0:25 0x81000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x81000000"' >> .config          make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- u-boot-nodtb.bin
           gzip -9 -c u-boot-nodtb.bin > ../u-boot-nodtb.bin.gz
           cd ..
