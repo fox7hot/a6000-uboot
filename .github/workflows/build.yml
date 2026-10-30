@@ -10,7 +10,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu bison flex libssl-dev bc
+          sudo apt-get install -y gcc-aarch64-linux-gnu bison flex libssl-dev bc libgnutls28-dev uuid-dev
 
       - name: Clone and Build U-Boot
         run: |
