@@ -1,4 +1,4 @@
-name: Build Custom U-Boot for A6000
+name: Build Complete EFI Bootchain for A6000
 
 on:
   workflow_dispatch:
@@ -10,23 +10,32 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu bison flex libssl-dev bc libgnutls28-dev uuid-dev
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-none-eabi bison flex libssl-dev bc libgnutls28-dev uuid-dev e2fsprogs
 
-      - name: Clone and Build U-Boot
+      - name: Clone repositories
         run: |
+          git clone --depth 1 https://github.com/msm8916-mainline/lk2nd.git
+          git clone --depth 1 https://github.com/msm8916-mainline/qhypstub.git
           git clone --depth 1 https://github.com/u-boot/u-boot.git
+          git clone --depth 1 https://github.com/msm8916-mainline/gen-uboot-img.git
+
+      - name: Patch U-Boot Config
+        run: |
           cd u-boot
           make CROSS_COMPILE=aarch64-linux-gnu- qcom_defconfig
           sed -i '/CONFIG_BOOTCOMMAND/d' .config
           sed -i '/CONFIG_BOOTDELAY/d' .config
           echo 'CONFIG_BOOTDELAY=0' >> .config
-          echo 'CONFIG_BOOTCOMMAND="load mmc 0:25 \$kernel_addr_r /EFI/BOOT/BOOTAA64.EFI; bootefi \$kernel_addr_r"' >> .config
+          echo 'CONFIG_BOOTCOMMAND="load mmc 0:25 0x80000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x80000000"' >> .config
           make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- u-boot-nodtb.bin
-          gzip -9 -c u-boot-nodtb.bin > ../u-boot-nodtb.bin.gz
 
-      - name: Upload Artifact
+      - name: Build with gen-uboot-img
+        run: |
+          cd gen-uboot-img
+          make -j$(nproc) LK2ND_DIR=../lk2nd QHYPSTUB_DIR=../qhypstub UBOOT_DIR=../u-boot
+
+      - name: Upload Combined Image
         uses: actions/upload-artifact@v4
         with:
-          name: u-boot-a6000
-          path: u-boot-nodtb.bin.gz
+          name: combined-efi-a6000
+          path: gen-uboot-img/build/combined.img
