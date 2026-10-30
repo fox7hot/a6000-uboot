@@ -1,0 +1,43 @@
+
+  
+
+  name: Build Custom U-Boot for A6000
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu bison flex libssl-dev bc
+
+      - name: Clone U-Boot
+        run: |
+          git clone --depth 1 https://github.com/u-boot/u-boot.git
+          cd u-boot
+
+      - name: Configure and Patch Bootcmd
+        run: |
+          cd u-boot
+          make CROSS_COMPILE=aarch64-linux-gnu- qcom_defconfig
+          sed -i '/CONFIG_BOOTCOMMAND/d' .config
+          sed -i '/CONFIG_BOOTDELAY/d' .config
+          echo 'CONFIG_BOOTDELAY=0' >> .config
+          echo 'CONFIG_BOOTCOMMAND="load mmc 0:25 $kernel_addr_r /EFI/BOOT/BOOTAA64.EFI; bootefi $kernel_addr_r"' >> .config
+          make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
+      - name: Compile U-Boot
+        run: |
+          cd u-boot
+          make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- u-boot-nodtb.bin
+          gzip -9 -c u-boot-nodtb.bin > ../u-boot-nodtb.bin.gz
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: u-boot-a6000
+          path: u-boot-nodtb.bin.gz
