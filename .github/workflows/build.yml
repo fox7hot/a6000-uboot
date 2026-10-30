@@ -20,7 +20,8 @@ jobs:
           sed -i '/CONFIG_BOOTCOMMAND/d' .config
           sed -i '/CONFIG_BOOTDELAY/d' .config
           echo 'CONFIG_BOOTDELAY=0' >> .config
-          echo 'CONFIG_BOOTCOMMAND="load mmc 0:cache 0x81000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x81000000 \$fdtcontroladdr"' >> .config
+          echo 'CONFIG_BOOTCOMMAND="part list mmc 0; mmc part; load mmc 0:22 0x81000000 /bootaa64.efi || load mmc 0:25 0x81000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x81000000 \$fdtcontroladdr"' >> .config
+          make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- u-boot-nodtb.bin
           gzip -9 -c u-boot-nodtb.bin > ../u-boot-nodtb.bin.gz
           cd ..
@@ -30,15 +31,17 @@ jobs:
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/qhypstub.bin
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
+          wget https://github.com/retrage/edk2-nightly/raw/master/bin/RELEASEAARCH64_Shell.efi -O bootaa64.efi
 
           mkdir -p build_stage
           7z x thirdstage.ext2 -obuild_stage/
           rm -rf build_stage/lost+found
 
           cp u-boot-nodtb.bin.gz build_stage/
+          cp bootaa64.efi build_stage/bootaa64.efi
 
           # Pack new thirdstage with 4K block size
-          mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 8M
+          mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 12M
 
           # Assemble combined.img
           cp lk2nd.img combined.img
