@@ -1,4 +1,4 @@
-name: Build Complete EFI Bootchain for A6000
+name: Build 32-bit UEFI Bootchain for A6000
 
 on:
   push:
@@ -12,59 +12,37 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu bison flex libssl-dev bc libgnutls28-dev uuid-dev e2fsprogs wget p7zip-full
+          sudo apt-get install -y e2fsprogs wget p7zip-full
 
-      - name: Clone and Compile Custom U-Boot
-        run: |
-          git clone --depth 1 https://github.com/u-boot/u-boot.git
-          cd u-boot
-          make CROSS_COMPILE=aarch64-linux-gnu- qcom_defconfig
-          sed -i '/CONFIG_BOOTCOMMAND/d' .config
-          sed -i '/CONFIG_BOOTDELAY/d' .config
-          
-          # bootdelay = -2 forces unconditional autoboot without checking for any key input!
-          echo 'CONFIG_BOOTDELAY=-2' >> .config
-          
-          # Overwrite default Qualcomm board environment completely
-          # stdin=nulldev ensures floating UART noise cannot trigger keypress aborts!
-          cat << 'ENVEOF' > board/qualcomm/default.env
-          stdin=nulldev
-          stdout=vidconsole
-          stderr=vidconsole
-          bootdelay=-2
-          bootcmd=echo [EFI] Starting EFI Shell at $prevbl_initrd_start_addr; bootefi $prevbl_initrd_start_addr:0x120000 $fdtcontroladdr
-          ENVEOF
-
-          make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- u-boot-nodtb.bin
-          gzip -9 -c u-boot-nodtb.bin > ../u-boot-nodtb.bin.gz
-          cd ..
-
-      - name: Package Complete combined.img
+      - name: Package 32-bit combined.img
         run: |
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
-          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/qhypstub.bin
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
-          wget https://github.com/retrage/edk2-nightly/raw/master/bin/RELEASEAARCH64_Shell.efi -O bootaa64.efi
 
           mkdir -p build_stage
           7z x thirdstage.ext2 -obuild_stage/
           rm -rf build_stage/lost+found
 
-          cp u-boot-nodtb.bin.gz build_stage/
-          cp bootaa64.efi build_stage/bootaa64.efi
+          # Copy our 32-bit UEFI binaries into build_stage
+          cp zImage-uefi build_stage/zImage-uefi
+          cp uefi32.bin build_stage/uefi32.bin
 
-          # Rewrite extlinux.conf to load bootaa64.efi as initrd directly into RAM!
+          # Download 32-bit ARM UEFI Shell
+          wget -L https://github.com/retrage/edk2-nightly/raw/master/bin/RELEASEARM_Shell.efi -O build_stage/shellarm.efi
+
+          # Rewrite extlinux.conf to boot 32-bit Qualcomm UEFI
           cat << 'EOF' > build_stage/extlinux/extlinux.conf
           timeout 0
-          default U-Boot
+          default LumiaUEFI
 
-          label U-Boot
-          	kernel /u-boot-nodtb.bin.gz
-          	initrd /bootaa64.efi
+          label LumiaUEFI
+          	kernel /zImage-uefi
           	fdtdir /dtbs
           	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
           EOF
@@ -74,10 +52,8 @@ jobs:
           # Pack new thirdstage with 4K block size
           mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 12M
 
-          # Assemble combined.img
+          # Assemble combined.img in 32-bit ARM mode (without qhypstub!)
           cp lk2nd.img combined.img
-          truncate -s 508K combined.img
-          cat qhypstub.bin >> combined.img
           truncate -s 512K combined.img
           cat new_thirdstage.ext2 >> combined.img
 
@@ -85,7 +61,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Release ${{ github.run_number }}
+          name: Release ${{ github.run_number }} - 32-bit UEFI
           files: combined.img
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
