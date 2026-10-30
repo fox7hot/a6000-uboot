@@ -35,7 +35,7 @@ jobs:
           stdout=vidconsole
           stderr=vidconsole
           bootdelay=-2
-          bootcmd=echo [EFI] Initrd at $prevbl_initrd_start_addr, FDT at $fdtcontroladdr; bootefi $prevbl_initrd_start_addr $fdtcontroladdr
+          bootcmd=echo [EFI] Starting EFI Shell at $prevbl_initrd_start_addr; bootefi $prevbl_initrd_start_addr:0x120000 $fdtcontroladdr
           ENVEOF
 
           make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
