@@ -21,14 +21,17 @@ jobs:
           make CROSS_COMPILE=aarch64-linux-gnu- qcom_defconfig
           sed -i '/CONFIG_BOOTCOMMAND/d' .config
           sed -i '/CONFIG_BOOTDELAY/d' .config
-          echo 'CONFIG_BOOTDELAY=0' >> .config
+          
+          # bootdelay = -2 forces unconditional autoboot without checking for any key input!
+          echo 'CONFIG_BOOTDELAY=-2' >> .config
           
           # Overwrite default Qualcomm board environment completely
-          # In-memory execution: bootefi directly from $prevbl_initrd_start_addr!
+          # stdin=nulldev ensures floating UART noise cannot trigger keypress aborts!
           cat << 'ENVEOF' > board/qualcomm/default.env
-          stdin=serial
-          stdout=serial,vidconsole
-          stderr=serial,vidconsole
+          stdin=nulldev
+          stdout=vidconsole
+          stderr=vidconsole
+          bootdelay=-2
           bootcmd=echo [EFI] Initrd at $prevbl_initrd_start_addr, FDT at $fdtcontroladdr; bootefi $prevbl_initrd_start_addr $fdtcontroladdr
           ENVEOF
 
