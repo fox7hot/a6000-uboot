@@ -24,11 +24,12 @@ jobs:
           echo 'CONFIG_BOOTDELAY=0' >> .config
           
           # Overwrite default Qualcomm board environment completely
+          # In-memory execution: bootefi directly from $prevbl_initrd_start_addr!
           cat << 'ENVEOF' > board/qualcomm/default.env
           stdin=serial
           stdout=serial,vidconsole
           stderr=serial,vidconsole
-          bootcmd=load mmc 0:19 0x81000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x81000000 $fdtcontroladdr
+          bootcmd=echo [EFI] Initrd at $prevbl_initrd_start_addr, FDT at $fdtcontroladdr; bootefi $prevbl_initrd_start_addr $fdtcontroladdr
           ENVEOF
 
           make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
@@ -49,6 +50,20 @@ jobs:
 
           cp u-boot-nodtb.bin.gz build_stage/
           cp bootaa64.efi build_stage/bootaa64.efi
+
+          # Rewrite extlinux.conf to load bootaa64.efi as initrd directly into RAM!
+          cat << 'EOF' > build_stage/extlinux/extlinux.conf
+          timeout 0
+          default U-Boot
+
+          label U-Boot
+          	kernel /u-boot-nodtb.bin.gz
+          	initrd /bootaa64.efi
+          	fdtdir /dtbs
+          	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
+          EOF
+
+          cat build_stage/extlinux/extlinux.conf
 
           # Pack new thirdstage with 4K block size
           mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 12M
