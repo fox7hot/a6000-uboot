@@ -78,8 +78,11 @@ jobs:
           truncate -s 512K combined.img
           cat new_thirdstage.ext2 >> combined.img
 
-      - name: Upload Combined Image
-        uses: actions/upload-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
         with:
-          name: combined-efi-a6000
-          path: combined.img
+          tag_name: v1.0.${{ github.run_number }}
+          name: Release ${{ github.run_number }}
+          files: combined.img
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
