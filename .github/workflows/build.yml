@@ -1,6 +1,8 @@
 name: Build Complete EFI Bootchain for A6000
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -20,7 +22,15 @@ jobs:
           sed -i '/CONFIG_BOOTCOMMAND/d' .config
           sed -i '/CONFIG_BOOTDELAY/d' .config
           echo 'CONFIG_BOOTDELAY=0' >> .config
-          echo 'CONFIG_BOOTCOMMAND="load mmc 0:19 0x81000000 /EFI/BOOT/BOOTAA64.EFI || load mmc 0:16 0x81000000 /bootaa64.efi; bootefi 0x81000000 \$fdtcontroladdr"' >> .config
+          
+          # Overwrite default Qualcomm board environment completely
+          cat << 'ENVEOF' > board/qualcomm/default.env
+          stdin=serial
+          stdout=serial,vidconsole
+          stderr=serial,vidconsole
+          bootcmd=load mmc 0:19 0x81000000 /EFI/BOOT/BOOTAA64.EFI; bootefi 0x81000000 $fdtcontroladdr
+          ENVEOF
+
           make CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- u-boot-nodtb.bin
           gzip -9 -c u-boot-nodtb.bin > ../u-boot-nodtb.bin.gz
