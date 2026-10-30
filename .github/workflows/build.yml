@@ -1,4 +1,4 @@
-name: Build Nokia TrustZone Emulated 32-bit UEFI Bootchain
+name: Build Pure 32-bit ARM UEFI Bootchain
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu e2fsprogs wget p7zip-full
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu e2fsprogs wget p7zip-full gzip
 
       - name: Compile Custom qhypstub with Nokia TrustZone SMC Trap
         run: |
@@ -26,7 +26,7 @@ jobs:
           aarch64-linux-gnu-objcopy -O binary qhypstub.elf qhypstub.bin
           ls -la qhypstub.bin
 
-      - name: Package combined.img
+      - name: Package 32-bit thirdstage and combined.img
         run: |
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
@@ -34,18 +34,25 @@ jobs:
           mkdir -p build_stage
           7z x thirdstage.ext2 -obuild_stage/
           rm -rf build_stage/lost+found
+          rm -f build_stage/bootaa64.efi.gz
 
-          # Copy 32-bit Lumia UEFI kernel into build_stage
-          cp zImage-uefi build_stage/zImage-uefi
-          cp uefi32.bin build_stage/uefi32.bin
+          # Gzip 32-bit ARM UEFI binaries
+          gzip -c Shell_Arm.efi > build_stage/Shell_Arm.efi.gz
+          gzip -c bootarm.efi > build_stage/bootarm.efi.gz
+          cp build_stage/Shell_Arm.efi.gz build_stage/bootaa64.efi.gz
 
           # Configure extlinux.conf
           cat << 'EOF' > build_stage/extlinux/extlinux.conf
-          timeout 0
-          default LumiaUEFI
+          timeout 1
+          default Shell32
 
-          label LumiaUEFI
-          	kernel /zImage-uefi
+          label Shell32
+          	kernel /Shell_Arm.efi.gz
+          	fdtdir /dtbs
+          	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
+
+          label WinBoot
+          	kernel /bootarm.efi.gz
           	fdtdir /dtbs
           	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
           EOF
@@ -53,20 +60,22 @@ jobs:
           cat build_stage/extlinux/extlinux.conf
 
           # Pack new thirdstage with 4K block size
-          mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 12M
+          mke2fs -t ext2 -b 4096 -F -d build_stage thirdstage.ext2 12M
 
           # Assemble combined.img with custom qhypstub containing Nokia TrustZone SMC emulator
           cp lk2nd.img combined.img
           truncate -s 508K combined.img
           cat qhypstub.bin >> combined.img
           truncate -s 512K combined.img
-          cat new_thirdstage.ext2 >> combined.img
+          cat thirdstage.ext2 >> combined.img
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Release ${{ github.run_number }} - Nokia TrustZone Emulated UEFI
-          files: combined.img
+          name: Release ${{ github.run_number }} - Pure 32-bit ARM UEFI
+          files: |
+            combined.img
+            thirdstage.ext2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
