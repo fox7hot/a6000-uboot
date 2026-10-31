@@ -28,7 +28,8 @@ jobs:
 
       - name: Compile EDK2 BaseTools
         run: |
-          make -C edk2/BaseTools -j$(nproc)
+          sed -i 's/-Werror//g' edk2/BaseTools/Source/C/Makefiles/header.makefile
+          make -C edk2/BaseTools -j$(nproc) BUILD_OPTFLAGS="-Wno-error"
 
       - name: Configure and Build MSM8916Pkg for Lenovo A6000
         run: |
