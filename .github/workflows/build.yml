@@ -37,32 +37,10 @@ jobs:
           find edk2/BaseTools/Source/C -name "*.makefile" -exec sed -i 's/-Werror//g' {} +
           make -C edk2/BaseTools -j$(nproc) BUILD_OPTFLAGS="-Wno-error"
 
-      - name: Patch EDK2 for Verbose Diagnostics and No Auto-Reboot
+      - name: Patch EDK2 for Diagnostics and No-Auto-Reboot
         run: |
-          # 1. Modify DefaultExceptionHandler so panics NEVER auto-reboot (pet watchdog in infinite loop)
-          cat << 'EOF' > patch_handler.py
-          with open("edk2/ArmPkg/Library/DefaultExceptionHandlerLib/AArch64/DefaultExceptionHandler.c", "r") as f:
-              c = f.read()
-          old_tail = "  ASSERT (FALSE);
-  CpuDeadLoop ();
-}"
-          new_tail = """  ASSERT (FALSE);
-            // Non-rebooting panic loop: keep screen visible forever and pet hardware watchdog
-            volatile UINT32 *wdog = (volatile UINT32 *)0x0B017000;
-            while (1) {
-              *wdog = 1;
-              for (volatile int i = 0; i < 100000; i++);
-            }
-          }"""
-          if old_tail in c:
-              c = c.replace(old_tail, new_tail)
-              with open("edk2/ArmPkg/Library/DefaultExceptionHandlerLib/AArch64/DefaultExceptionHandler.c", "w") as f:
-                  f.write(c)
-              print("DefaultExceptionHandler successfully patched!")
-          else:
-              print("Warning: old_tail not found in DefaultExceptionHandler.c")
-          EOF
-          python3 patch_handler.py
+          # 1. Modify DefaultExceptionHandler so panics NEVER reboot (pet hardware watchdog in infinite loop)
+          sed -i 's/CpuDeadLoop ();/volatile UINT32 *w = (volatile UINT32 *)0x0B017000; while (1) { *w = 1; for (volatile int i = 0; i < 100000; i++); }/g' edk2/ArmPkg/Library/DefaultExceptionHandlerLib/AArch64/DefaultExceptionHandler.c
 
           # 2. Patch MSM8916PkgHelper.S with visual cyan banner + watchdog pet/disable
           cat << 'EOF' > edk2-msm8916/MSM8916Pkg/Library/MSM8916PkgLib/MSM8916PkgHelper.S
@@ -95,7 +73,7 @@ jobs:
             // 720 pixels wide, 120 scanlines deep = 86400 words = 0x15180
             movz  x0, #0x0000
             movk  x0, #0x8e00, lsl #16
-            // ARGB Cyan: 0xFF00FFFF (Blue + Green full)
+            // ARGB Cyan: 0xFF00FFFF
             movz  w1, #0xFFFF
             movk  w1, #0x00FF, lsl #16
             movz  w2, #0x5180
@@ -105,7 +83,7 @@ jobs:
             subs  w2, w2, #1
             bne   1b
 
-            // 5. Clean & Invalidate Data Cache for FB range so display DMA sees it
+            // 5. Clean & Invalidate Data Cache for FB range
             movz  x0, #0x0000
             movk  x0, #0x8e00, lsl #16
             movz  w2, #0x4600
@@ -138,50 +116,6 @@ jobs:
             add   x0, x1, x0, LSR #6
             ret
           EOF
-
-          # 3. Patch MSM8916PkgMem.c so Framebuffer is mapped WRITE_THROUGH
-          cat << 'EOF' > patch_mem.py
-          with open("edk2-msm8916/MSM8916Pkg/Library/MSM8916PkgLib/MSM8916PkgMem.c", "r") as f:
-              c = f.read()
-
-          target = """  // DDR - 4.0GB section
-            VirtualMemoryTable[Index].PhysicalBase    = PcdGet64 (PcdSystemMemoryBase);
-            VirtualMemoryTable[Index].VirtualBase     = PcdGet64 (PcdSystemMemoryBase);
-            VirtualMemoryTable[Index].Length          = PcdGet64 (PcdSystemMemorySize);
-            VirtualMemoryTable[Index].Attributes      = CacheAttributes;"""
-
-          # Strip whitespace when matching
-          target_code = "VirtualMemoryTable[Index].PhysicalBase    = PcdGet64 (PcdSystemMemoryBase);"
-          replacement = """  // DDR below Framebuffer (0x80000000 to 0x8E000000: 224 MB)
-            VirtualMemoryTable[Index].PhysicalBase    = 0x80000000;
-            VirtualMemoryTable[Index].VirtualBase     = 0x80000000;
-            VirtualMemoryTable[Index].Length          = 0x0E000000;
-            VirtualMemoryTable[Index].Attributes      = CacheAttributes;
-
-            // Framebuffer (0x8E000000 to 0x8E400000: 4 MB) - WRITE THROUGH
-            VirtualMemoryTable[++Index].PhysicalBase  = 0x8E000000;
-            VirtualMemoryTable[Index].VirtualBase     = 0x8E000000;
-            VirtualMemoryTable[Index].Length          = 0x00400000;
-            VirtualMemoryTable[Index].Attributes      = ARM_MEMORY_REGION_ATTRIBUTE_WRITE_THROUGH;
-
-            // DDR above Framebuffer (0x8E400000 to 0xC0000000: 800 MB)
-            VirtualMemoryTable[++Index].PhysicalBase  = 0x8E400000;
-            VirtualMemoryTable[Index].VirtualBase     = 0x8E400000;
-            VirtualMemoryTable[Index].Length          = 0x31C00000;
-            VirtualMemoryTable[Index].Attributes      = CacheAttributes;"""
-
-          if target_code in c:
-              idx = c.find(target_code)
-              # replace the whole 4-line block
-              end_idx = c.find("VirtualMemoryTable[Index].Attributes      = CacheAttributes;", idx) + len("VirtualMemoryTable[Index].Attributes      = CacheAttributes;")
-              c = c[:idx] + replacement + c[end_idx:]
-              with open("edk2-msm8916/MSM8916Pkg/Library/MSM8916PkgLib/MSM8916PkgMem.c", "w") as f:
-                  f.write(c)
-              print("MSM8916PkgMem.c successfully patched for write-through Framebuffer!")
-          else:
-              print("Warning: target_code not found in MSM8916PkgMem.c")
-          EOF
-          python3 patch_mem.py
 
       - name: Configure and Build MSM8916Pkg for Lenovo A6000
         run: |
