@@ -1,4 +1,4 @@
-name: Build 32-bit Qualcomm UEFI for Lenovo A6000
+name: Build EDK2 ARM32 for Lenovo A6000
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -18,52 +18,51 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y e2fsprogs wget p7zip-full
+          sudo apt-get install -y build-essential uuid-dev iasl git nasm gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu bc python3-distutils e2fsprogs wget p7zip-full
 
-      - name: Package 32-bit thirdstage and combined.img
+      - name: Clone EDK2 and MSM8916Pkg
         run: |
-          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
-          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
+          git clone --depth 1 https://github.com/tianocore/edk2.git --recursive
+          git clone --depth 1 https://github.com/tianocore/edk2-platforms.git
+          git clone --depth 1 https://github.com/ivoszbg/edk2-msm8916.git
 
-          mkdir -p build_stage
-          7z x thirdstage.ext2 -obuild_stage/
-          rm -rf build_stage/lost+found
-          rm -f build_stage/bootaa64.efi.gz
+      - name: Compile EDK2 BaseTools
+        run: |
+          make -C edk2/BaseTools -j$(nproc)
 
-          # Copy 32-bit MSM8916 UEFI payload
-          cp uefi32.bin build_stage/uefi32.bin
-          ls -la build_stage/uefi32.bin
+      - name: Build MSM8916Pkg for ARM
+        run: |
+          cd edk2-msm8916
+          export PACKAGES_PATH=$PWD/../edk2:$PWD/../edk2-platforms:$PWD
+          export WORKSPACE=$PWD/workspace
+          . ../edk2/edksetup.sh
+          
+          # Create a6000.dsc for ARM
+          cat << 'EOF' > MSM8916Pkg/Devices/a6000.dsc
+          [Defines]
+            PLATFORM_NAME                  = MSM8916Pkg
+            PLATFORM_GUID                  = 28f1a3bf-193a-47e3-a7b9-5a435eaab2ee
+            PLATFORM_VERSION               = 0.1
+            DSC_SPECIFICATION              = 0x00010019
+            OUTPUT_DIRECTORY               = Build/$(PLATFORM_NAME)
+            SUPPORTED_ARCHITECTURES        = ARM
+            BUILD_TARGETS                  = DEBUG|RELEASE
+            SKUID_IDENTIFIER               = DEFAULT
+            FLASH_DEFINITION               = MSM8916Pkg/MSM8916Pkg.fdf
 
-          # Download 32-bit ARM UEFI Shell as fallback
-          wget -L https://github.com/retrage/edk2-nightly/raw/master/bin/RELEASEARM_Shell.efi -O build_stage/shellarm.efi || true
+          !include MSM8916Pkg/MSM8916Pkg.dsc
 
-          # Configure extlinux.conf
-          cat << 'EOF' > build_stage/extlinux/extlinux.conf
-          timeout 0
-          default MSM8916_UEFI32
-
-          label MSM8916_UEFI32
-          	kernel /uefi32.bin
-          	fdtdir /dtbs
-          	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
+          [PcdsFixedAtBuild.common]
+            # System Memory (Lenovo A6000: 1GB = 0x40000000)
+            gArmTokenSpaceGuid.PcdSystemMemoryBase|0x80000000
+            gArmTokenSpaceGuid.PcdSystemMemorySize|0x40000000
+            
+            # Framebuffer (Lenovo A6000: 720x1280)
+            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x8e000000
+            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|720
+            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|1280
+            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferVisibleWidth|720
+            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferVisibleHeight|1280
           EOF
 
-          cat build_stage/extlinux/extlinux.conf
-
-          # Pack new thirdstage with 4K block size
-          mke2fs -t ext2 -b 4096 -F -d build_stage thirdstage.ext2 12M
-
-          # Assemble combined.img (pure 32-bit ARM mode: lk2nd + thirdstage.ext2)
-          cp lk2nd.img combined.img
-          truncate -s 512K combined.img
-          cat thirdstage.ext2 >> combined.img
-          ls -la combined.img
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Release ${{ github.run_number }} - Genuine 32-bit MSM8916 UEFI
-          files: combined.img
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GCC5_ARM_PREFIX=arm-linux-gnueabihf- build -s -n 0 -a ARM -t GCC5 -p MSM8916Pkg/Devices/a6000.dsc || true
