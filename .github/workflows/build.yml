@@ -1,4 +1,4 @@
-name: Build EDK2 ARM32 for Lenovo A6000
+name: Test EDK2 ARM32 build with GCC
 
 on:
   push:
@@ -37,6 +37,9 @@ jobs:
           export WORKSPACE=$PWD/workspace
           . ../edk2/edksetup.sh
           
+          # Allow ARM in MSM8916Pkg.dsc
+          sed -i 's/SUPPORTED_ARCHITECTURES        = AARCH64/SUPPORTED_ARCHITECTURES        = ARM|AARCH64/' MSM8916Pkg/MSM8916Pkg.dsc
+          
           # Create a6000.dsc for ARM
           cat << 'EOF' > MSM8916Pkg/Devices/a6000.dsc
           [Defines]
@@ -45,7 +48,7 @@ jobs:
             PLATFORM_VERSION               = 0.1
             DSC_SPECIFICATION              = 0x00010019
             OUTPUT_DIRECTORY               = Build/$(PLATFORM_NAME)
-            SUPPORTED_ARCHITECTURES        = ARM
+            SUPPORTED_ARCHITECTURES        = ARM|AARCH64
             BUILD_TARGETS                  = DEBUG|RELEASE
             SKUID_IDENTIFIER               = DEFAULT
             FLASH_DEFINITION               = MSM8916Pkg/MSM8916Pkg.fdf
@@ -53,11 +56,9 @@ jobs:
           !include MSM8916Pkg/MSM8916Pkg.dsc
 
           [PcdsFixedAtBuild.common]
-            # System Memory (Lenovo A6000: 1GB = 0x40000000)
             gArmTokenSpaceGuid.PcdSystemMemoryBase|0x80000000
             gArmTokenSpaceGuid.PcdSystemMemorySize|0x40000000
             
-            # Framebuffer (Lenovo A6000: 720x1280)
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x8e000000
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|720
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|1280
@@ -65,4 +66,5 @@ jobs:
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferVisibleHeight|1280
           EOF
 
-          GCC5_ARM_PREFIX=arm-linux-gnueabihf- build -s -n 0 -a ARM -t GCC5 -p MSM8916Pkg/Devices/a6000.dsc || true
+          cat MSM8916Pkg/Devices/a6000.dsc
+          GCC_ARM_PREFIX=arm-linux-gnueabihf- build -s -n 0 -a ARM -t GCC -p MSM8916Pkg/Devices/a6000.dsc
