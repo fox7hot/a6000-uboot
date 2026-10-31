@@ -75,41 +75,40 @@ jobs:
           GCC5_AARCH64_PREFIX=aarch64-linux-gnu- build -s -n 0 -a AARCH64 -t GCC5 -p MSM8916Pkg/Devices/a6000.dsc
           
           ls -la workspace/Build/MSM8916Pkg/DEBUG_GCC5/FV/
-          
-          # Compress EFI image
-          gzip -c < workspace/Build/MSM8916Pkg/DEBUG_GCC5/FV/MSM8916PKG_UEFI.fd > ../uefi.img
-          
-          # Append A6000 DTB
-          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
-          7z e thirdstage.ext2 dtbs/qcom/msm8916-wingtech-wt86518.dtb -y
-          cat msm8916-wingtech-wt86518.dtb >> ../uefi.img
+          cp workspace/Build/MSM8916Pkg/DEBUG_GCC5/FV/MSM8916PKG_UEFI.fd ../uefi.fd
+          gzip -9 -c < ../uefi.fd > ../uefi.gz
 
-      - name: Package with lk2nd
+      - name: Package with lk2nd and qhypstub
         run: |
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
+          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/qhypstub.bin
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
           
           mkdir -p build_stage
           7z x thirdstage.ext2 -obuild_stage/
           rm -rf build_stage/lost+found
-          rm -f build_stage/bootaa64.efi.gz
           rm -f build_stage/u-boot*
+          rm -f build_stage/bootaa64.efi.gz
           
-          # Put EDK2 UEFI into thirdstage
-          cp uefi.img build_stage/uefi.img
+          # Put compressed EDK2 UEFI into thirdstage
+          cp uefi.gz build_stage/uefi.gz
           
           cat << 'EOF' > build_stage/extlinux/extlinux.conf
           timeout 0
           default EDK2_A6000
 
           label EDK2_A6000
-          	kernel /uefi.img
+          	kernel /uefi.gz
           	fdtdir /dtbs
           	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
           EOF
           
-          mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 16M
+          mke2fs -t ext2 -F -d build_stage new_thirdstage.ext2 8M
+          
+          # Assemble combined.img according to gen-uboot-img standard
           cp lk2nd.img a6000_edk2_combined.img
+          truncate -s 508K a6000_edk2_combined.img
+          cat qhypstub.bin >> a6000_edk2_combined.img
           truncate -s 512K a6000_edk2_combined.img
           cat new_thirdstage.ext2 >> a6000_edk2_combined.img
           ls -la a6000_edk2_combined.img
@@ -120,7 +119,8 @@ jobs:
           tag_name: v1.0.${{ github.run_number }}
           name: Release ${{ github.run_number }} - EDK2 Tianocore for Lenovo A6000
           files: |
-            uefi.img
+            uefi.fd
+            uefi.gz
             a6000_edk2_combined.img
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
