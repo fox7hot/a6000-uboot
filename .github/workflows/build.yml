@@ -1,4 +1,4 @@
-name: Test EDK2 ARM32 build with GCC
+name: Build EDK2 for Lenovo A6000
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
 
       - name: Clone EDK2 and MSM8916Pkg
         run: |
-          git clone --depth 1 https://github.com/tianocore/edk2.git --recursive
+          git clone --depth 1 --branch edk2-stable202102 https://github.com/tianocore/edk2.git --recursive
           git clone --depth 1 https://github.com/tianocore/edk2-platforms.git
           git clone --depth 1 https://github.com/ivoszbg/edk2-msm8916.git
 
@@ -30,17 +30,14 @@ jobs:
         run: |
           make -C edk2/BaseTools -j$(nproc)
 
-      - name: Build MSM8916Pkg for ARM
+      - name: Configure and Build MSM8916Pkg for Lenovo A6000
         run: |
           cd edk2-msm8916
           export PACKAGES_PATH=$PWD/../edk2:$PWD/../edk2-platforms:$PWD
           export WORKSPACE=$PWD/workspace
           . ../edk2/edksetup.sh
           
-          # Allow ARM in MSM8916Pkg.dsc
-          sed -i 's/SUPPORTED_ARCHITECTURES        = AARCH64/SUPPORTED_ARCHITECTURES        = ARM|AARCH64/' MSM8916Pkg/MSM8916Pkg.dsc
-          
-          # Create a6000.dsc for ARM
+          # Create a6000.dsc for Lenovo A6000
           cat << 'EOF' > MSM8916Pkg/Devices/a6000.dsc
           [Defines]
             PLATFORM_NAME                  = MSM8916Pkg
@@ -48,7 +45,7 @@ jobs:
             PLATFORM_VERSION               = 0.1
             DSC_SPECIFICATION              = 0x00010019
             OUTPUT_DIRECTORY               = Build/$(PLATFORM_NAME)
-            SUPPORTED_ARCHITECTURES        = ARM|AARCH64
+            SUPPORTED_ARCHITECTURES        = AARCH64
             BUILD_TARGETS                  = DEBUG|RELEASE
             SKUID_IDENTIFIER               = DEFAULT
             FLASH_DEFINITION               = MSM8916Pkg/MSM8916Pkg.fdf
@@ -56,9 +53,11 @@ jobs:
           !include MSM8916Pkg/MSM8916Pkg.dsc
 
           [PcdsFixedAtBuild.common]
+            # System Memory (Lenovo A6000: 1GB = 0x40000000)
             gArmTokenSpaceGuid.PcdSystemMemoryBase|0x80000000
             gArmTokenSpaceGuid.PcdSystemMemorySize|0x40000000
             
+            # Framebuffer (Lenovo A6000: 720x1280 at 0x8e000000)
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x8e000000
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|720
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|1280
@@ -66,5 +65,55 @@ jobs:
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferVisibleHeight|1280
           EOF
 
-          cat MSM8916Pkg/Devices/a6000.dsc
-          GCC_ARM_PREFIX=arm-linux-gnueabihf- build -s -n 0 -a ARM -t GCC -p MSM8916Pkg/Devices/a6000.dsc
+          GCC5_AARCH64_PREFIX=aarch64-linux-gnu- build -s -n 0 -a AARCH64 -t GCC5 -p MSM8916Pkg/Devices/a6000.dsc
+          
+          ls -la workspace/Build/MSM8916Pkg/DEBUG_GCC5/FV/
+          
+          # Compress EFI image
+          gzip -c < workspace/Build/MSM8916Pkg/DEBUG_GCC5/FV/MSM8916PKG_UEFI.fd > ../uefi.img
+          
+          # Append A6000 DTB
+          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
+          7z e thirdstage.ext2 dtbs/qcom/msm8916-wingtech-wt86518.dtb -y
+          cat msm8916-wingtech-wt86518.dtb >> ../uefi.img
+
+      - name: Package with lk2nd
+        run: |
+          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
+          wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
+          
+          mkdir -p build_stage
+          7z x thirdstage.ext2 -obuild_stage/
+          rm -rf build_stage/lost+found
+          rm -f build_stage/bootaa64.efi.gz
+          rm -f build_stage/u-boot*
+          
+          # Put EDK2 UEFI into thirdstage
+          cp uefi.img build_stage/uefi.img
+          
+          cat << 'EOF' > build_stage/extlinux/extlinux.conf
+          timeout 0
+          default EDK2_A6000
+
+          label EDK2_A6000
+          	kernel /uefi.img
+          	fdtdir /dtbs
+          	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
+          EOF
+          
+          mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 16M
+          cp lk2nd.img a6000_edk2_combined.img
+          truncate -s 512K a6000_edk2_combined.img
+          cat new_thirdstage.ext2 >> a6000_edk2_combined.img
+          ls -la a6000_edk2_combined.img
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Release ${{ github.run_number }} - EDK2 Tianocore for Lenovo A6000
+          files: |
+            uefi.img
+            a6000_edk2_combined.img
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
