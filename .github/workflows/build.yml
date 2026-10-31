@@ -1,4 +1,4 @@
-name: Build EDK2 for Lenovo A6000
+name: Build Diagnostic EDK2 for Lenovo A6000
 
 on:
   push:
@@ -37,6 +37,152 @@ jobs:
           find edk2/BaseTools/Source/C -name "*.makefile" -exec sed -i 's/-Werror//g' {} +
           make -C edk2/BaseTools -j$(nproc) BUILD_OPTFLAGS="-Wno-error"
 
+      - name: Patch EDK2 for Verbose Diagnostics and No Auto-Reboot
+        run: |
+          # 1. Modify DefaultExceptionHandler so panics NEVER auto-reboot (pet watchdog in infinite loop)
+          cat << 'EOF' > patch_handler.py
+          with open("edk2/ArmPkg/Library/DefaultExceptionHandlerLib/AArch64/DefaultExceptionHandler.c", "r") as f:
+              c = f.read()
+          old_tail = "  ASSERT (FALSE);
+  CpuDeadLoop ();
+}"
+          new_tail = """  ASSERT (FALSE);
+            // Non-rebooting panic loop: keep screen visible forever and pet hardware watchdog
+            volatile UINT32 *wdog = (volatile UINT32 *)0x0B017000;
+            while (1) {
+              *wdog = 1;
+              for (volatile int i = 0; i < 100000; i++);
+            }
+          }"""
+          if old_tail in c:
+              c = c.replace(old_tail, new_tail)
+              with open("edk2/ArmPkg/Library/DefaultExceptionHandlerLib/AArch64/DefaultExceptionHandler.c", "w") as f:
+                  f.write(c)
+              print("DefaultExceptionHandler successfully patched!")
+          else:
+              print("Warning: old_tail not found in DefaultExceptionHandler.c")
+          EOF
+          python3 patch_handler.py
+
+          # 2. Patch MSM8916PkgHelper.S with visual cyan banner + watchdog pet/disable
+          cat << 'EOF' > edk2-msm8916/MSM8916Pkg/Library/MSM8916PkgLib/MSM8916PkgHelper.S
+          #include <AsmMacroIoLibV8.h>
+          #include <Library/ArmLib.h>
+
+          .text
+          .align 3
+
+          ASM_FUNC(ArmPlatformPeiBootAction)
+            // 1. Disable MSM8916 APCS Hardware Watchdog (0x0B017008 = 0)
+            movz  x0, #0x7008
+            movk  x0, #0x0B01, lsl #16
+            str   wzr, [x0]
+
+            // 2. Set Watchdog Bite Time to maximum (0x0B01700C = 0x7FFFFFFF)
+            movz  w1, #0xFFFF
+            movk  w1, #0x7FFF, lsl #16
+            movz  x0, #0x700c
+            movk  x0, #0x0B01, lsl #16
+            str   w1, [x0]
+
+            // 3. Pet/Reset Watchdog (0x0B017000 = 1)
+            movz  w1, #1
+            movz  x0, #0x7000
+            movk  x0, #0x0B01, lsl #16
+            str   w1, [x0]
+
+            // 4. Draw Bright Cyan diagnostic banner on linear Framebuffer (0x8e000000)
+            // 720 pixels wide, 120 scanlines deep = 86400 words = 0x15180
+            movz  x0, #0x0000
+            movk  x0, #0x8e00, lsl #16
+            // ARGB Cyan: 0xFF00FFFF (Blue + Green full)
+            movz  w1, #0xFFFF
+            movk  w1, #0x00FF, lsl #16
+            movz  w2, #0x5180
+            movk  w2, #0x0001, lsl #16
+          1:
+            str   w1, [x0], #4
+            subs  w2, w2, #1
+            bne   1b
+
+            // 5. Clean & Invalidate Data Cache for FB range so display DMA sees it
+            movz  x0, #0x0000
+            movk  x0, #0x8e00, lsl #16
+            movz  w2, #0x4600
+            movk  w2, #0x0005, lsl #16
+          2:
+            dc    civac, x0
+            add   x0, x0, #64
+            subs  w2, w2, #64
+            bgt   2b
+            dsb   sy
+            isb
+
+            ret
+
+          ASM_FUNC(ArmPlatformIsPrimaryCore)
+            MOV32 (w1, FixedPcdGet32(PcdArmPrimaryCoreMask))
+            and   x0, x0, x1
+            MOV32 (w1, FixedPcdGet32(PcdArmPrimaryCore))
+            cmp   w0, w1
+            cset  x0, eq
+            ret
+
+          ASM_FUNC(ArmPlatformGetPrimaryCoreMpId)
+            MOV32 (w0, FixedPcdGet32(PcdArmPrimaryCore))
+            ret
+
+          ASM_FUNC(ArmPlatformGetCorePosition)
+            and   x1, x0, #ARM_CORE_MASK
+            and   x0, x0, #ARM_CLUSTER_MASK
+            add   x0, x1, x0, LSR #6
+            ret
+          EOF
+
+          # 3. Patch MSM8916PkgMem.c so Framebuffer is mapped WRITE_THROUGH
+          cat << 'EOF' > patch_mem.py
+          with open("edk2-msm8916/MSM8916Pkg/Library/MSM8916PkgLib/MSM8916PkgMem.c", "r") as f:
+              c = f.read()
+
+          target = """  // DDR - 4.0GB section
+            VirtualMemoryTable[Index].PhysicalBase    = PcdGet64 (PcdSystemMemoryBase);
+            VirtualMemoryTable[Index].VirtualBase     = PcdGet64 (PcdSystemMemoryBase);
+            VirtualMemoryTable[Index].Length          = PcdGet64 (PcdSystemMemorySize);
+            VirtualMemoryTable[Index].Attributes      = CacheAttributes;"""
+
+          # Strip whitespace when matching
+          target_code = "VirtualMemoryTable[Index].PhysicalBase    = PcdGet64 (PcdSystemMemoryBase);"
+          replacement = """  // DDR below Framebuffer (0x80000000 to 0x8E000000: 224 MB)
+            VirtualMemoryTable[Index].PhysicalBase    = 0x80000000;
+            VirtualMemoryTable[Index].VirtualBase     = 0x80000000;
+            VirtualMemoryTable[Index].Length          = 0x0E000000;
+            VirtualMemoryTable[Index].Attributes      = CacheAttributes;
+
+            // Framebuffer (0x8E000000 to 0x8E400000: 4 MB) - WRITE THROUGH
+            VirtualMemoryTable[++Index].PhysicalBase  = 0x8E000000;
+            VirtualMemoryTable[Index].VirtualBase     = 0x8E000000;
+            VirtualMemoryTable[Index].Length          = 0x00400000;
+            VirtualMemoryTable[Index].Attributes      = ARM_MEMORY_REGION_ATTRIBUTE_WRITE_THROUGH;
+
+            // DDR above Framebuffer (0x8E400000 to 0xC0000000: 800 MB)
+            VirtualMemoryTable[++Index].PhysicalBase  = 0x8E400000;
+            VirtualMemoryTable[Index].VirtualBase     = 0x8E400000;
+            VirtualMemoryTable[Index].Length          = 0x31C00000;
+            VirtualMemoryTable[Index].Attributes      = CacheAttributes;"""
+
+          if target_code in c:
+              idx = c.find(target_code)
+              # replace the whole 4-line block
+              end_idx = c.find("VirtualMemoryTable[Index].Attributes      = CacheAttributes;", idx) + len("VirtualMemoryTable[Index].Attributes      = CacheAttributes;")
+              c = c[:idx] + replacement + c[end_idx:]
+              with open("edk2-msm8916/MSM8916Pkg/Library/MSM8916PkgLib/MSM8916PkgMem.c", "w") as f:
+                  f.write(c)
+              print("MSM8916PkgMem.c successfully patched for write-through Framebuffer!")
+          else:
+              print("Warning: target_code not found in MSM8916PkgMem.c")
+          EOF
+          python3 patch_mem.py
+
       - name: Configure and Build MSM8916Pkg for Lenovo A6000
         run: |
           cd edk2-msm8916
@@ -44,7 +190,7 @@ jobs:
           export WORKSPACE=$PWD/workspace
           . ../edk2/edksetup.sh
           
-          # Create a6000.dsc for Lenovo A6000
+          # Create a6000.dsc for Lenovo A6000 with explicit 32 bpp
           cat << 'EOF' > MSM8916Pkg/Devices/a6000.dsc
           [Defines]
             PLATFORM_NAME                  = MSM8916Pkg
@@ -64,21 +210,21 @@ jobs:
             gArmTokenSpaceGuid.PcdSystemMemoryBase|0x80000000
             gArmTokenSpaceGuid.PcdSystemMemorySize|0x40000000
             
-            # Framebuffer (Lenovo A6000: 720x1280 at 0x8e000000)
+            # Framebuffer (Lenovo A6000: 720x1280 at 0x8e000000, 32 BPP)
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x8e000000
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|720
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|1280
+            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferPixelBpp|32
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferVisibleWidth|720
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferVisibleHeight|1280
           EOF
 
           GCC5_AARCH64_PREFIX=aarch64-linux-gnu- build -s -n 0 -a AARCH64 -t GCC5 -p MSM8916Pkg/Devices/a6000.dsc
           
-          ls -la workspace/Build/MSM8916Pkg/DEBUG_GCC5/FV/
           cp workspace/Build/MSM8916Pkg/DEBUG_GCC5/FV/MSM8916PKG_UEFI.fd ../uefi.fd
           gzip -9 -c < ../uefi.fd > ../uefi.gz
 
-      - name: Package with lk2nd and qhypstub
+      - name: Package with lk2nd and Non-Rebooting Diagnostic Extlinux
         run: |
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/qhypstub.bin
@@ -90,22 +236,25 @@ jobs:
           rm -f build_stage/u-boot*
           rm -f build_stage/bootaa64.efi.gz
           
-          # Put compressed EDK2 UEFI into thirdstage
+          # Copy our diagnostic uefi.gz
           cp uefi.gz build_stage/uefi.gz
           
+          # Create verbose, non-rebooting extlinux configuration with 10-minute timeout
           cat << 'EOF' > build_stage/extlinux/extlinux.conf
-          timeout 0
+          timeout 600
           default EDK2_A6000
+          menu title Lenovo A6000 Diagnostic Bootloader Menu
 
           label EDK2_A6000
+          	menu label 1. Tianocore EDK2 UEFI Diagnostic (Lenovo A6000)
           	kernel /uefi.gz
-          	fdtdir /dtbs
-          	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888
+          	fdt /dtbs/qcom/msm8916-wingtech-wt86518.dtb
+          	append console=tty0 earlycon lk2nd.debug=1 panic=-1 reboot=p
           EOF
           
           mke2fs -t ext2 -F -d build_stage new_thirdstage.ext2 8M
           
-          # Assemble combined.img according to gen-uboot-img standard
+          # Assemble combined boot image
           cp lk2nd.img a6000_edk2_combined.img
           truncate -s 508K a6000_edk2_combined.img
           cat qhypstub.bin >> a6000_edk2_combined.img
@@ -117,7 +266,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Release ${{ github.run_number }} - EDK2 Tianocore for Lenovo A6000
+          name: Release ${{ github.run_number }} - Verbose Non-Rebooting Diagnostic EDK2
           files: |
             uefi.fd
             uefi.gz
