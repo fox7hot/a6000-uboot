@@ -22,7 +22,11 @@ jobs:
 
       - name: Clone EDK2 and MSM8916Pkg
         run: |
-          git clone --depth 1 --branch edk2-stable202102 https://github.com/tianocore/edk2.git --recursive
+          git clone --depth 1 --branch edk2-stable202102 https://github.com/tianocore/edk2.git
+          cd edk2
+          git submodule update --init ArmPkg/Library/ArmSoftFloatLib/berkeley-softfloat-3 || true
+          git submodule update --init CryptoPkg/Library/OpensslLib/openssl || true
+          cd ..
           git clone --depth 1 https://github.com/tianocore/edk2-platforms.git
           git clone --depth 1 https://github.com/ivoszbg/edk2-msm8916.git
 
