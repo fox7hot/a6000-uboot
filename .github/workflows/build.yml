@@ -24,15 +24,17 @@ jobs:
         run: |
           git clone --depth 1 --branch edk2-stable202102 https://github.com/tianocore/edk2.git
           cd edk2
-          git submodule update --init ArmPkg/Library/ArmSoftFloatLib/berkeley-softfloat-3 || true
-          git submodule update --init CryptoPkg/Library/OpensslLib/openssl || true
+          git submodule update --init BaseTools/Source/C/BrotliCompress/brotli
+          git submodule update --init MdeModulePkg/Library/BrotliCustomDecompressLib/brotli
+          git submodule update --init ArmPkg/Library/ArmSoftFloatLib/berkeley-softfloat-3
+          git submodule update --init CryptoPkg/Library/OpensslLib/openssl
           cd ..
           git clone --depth 1 https://github.com/tianocore/edk2-platforms.git
           git clone --depth 1 https://github.com/ivoszbg/edk2-msm8916.git
 
       - name: Compile EDK2 BaseTools
         run: |
-          sed -i 's/-Werror//g' edk2/BaseTools/Source/C/Makefiles/header.makefile
+          find edk2/BaseTools/Source/C -name "*.makefile" -exec sed -i 's/-Werror//g' {} +
           make -C edk2/BaseTools -j$(nproc) BUILD_OPTFLAGS="-Wno-error"
 
       - name: Configure and Build MSM8916Pkg for Lenovo A6000
