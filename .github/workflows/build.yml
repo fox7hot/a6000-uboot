@@ -22,7 +22,7 @@ jobs:
 
       - name: Clone EDK2 and MSM8916Pkg
         run: |
-          git clone --depth 1 --branch edk2-stable202102 https://github.com/tianocore/edk2.git
+          git clone --depth 1 --branch edk2-stable202111 https://github.com/tianocore/edk2.git
           cd edk2
           git submodule update --init BaseTools/Source/C/BrotliCompress/brotli
           git submodule update --init MdeModulePkg/Library/BrotliCustomDecompressLib/brotli
