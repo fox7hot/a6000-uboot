@@ -218,15 +218,126 @@ el2_vector_table:
 
 	excvec	el2_vector_table_end
 
-/* Nokia TrustZone SMC Emulator */
+/* Nokia / Windows Phone TrustZone SMC Emulator & Translator */
 handle_smc32:
+	/* w0 holds Function ID / SCM Service ID */
+	mov	w14, w0
+
+	/* 1. Standard ARM PSCI calls (0x84000000 - 0x8400001F) */
+	and	w15, w14, #0xFFFF0000
+	mov	w13, #0x84000000
+	cmp	w15, w13
+	beq	forward_to_el3
+
+	/* 2. SCM_SVC_INFO query "winsecapp" (0x02000601 or SCM v1 0x1801) */
+	mov	w13, #0x02000601
+	cmp	w14, w13
+	beq	handle_info_winsecapp
+	mov	w13, #0x1801
+	cmp	w14, w13
+	beq	handle_info_winsecapp
+
+	/* 3. WinSecApp Init & Get Version (0x02000201, 0x02000202, or SCM v1 0x3801/0x3802) */
+	mov	w13, #0x02000201
+	cmp	w14, w13
+	beq	handle_winsecapp_version
+	mov	w13, #0x02000202
+	cmp	w14, w13
+	beq	handle_winsecapp_version
+	mov	w13, #0x3801
+	cmp	w14, w13
+	beq	handle_winsecapp_version
+	mov	w13, #0x3802
+	cmp	w14, w13
+	beq	handle_winsecapp_version
+
+	/* 4. TPM / fTPM Query (0x02000401 or SCM v1 0x1001) */
+	mov	w13, #0x02000401
+	cmp	w14, w13
+	beq	handle_tpm_query
+	mov	w13, #0x1001
+	cmp	w14, w13
+	beq	handle_tpm_query
+
+	/* 5. OEM Fuse / Secure Boot State (0x02000801 or SCM v1 0x2001) */
+	mov	w13, #0x02000801
+	cmp	w14, w13
+	beq	handle_fuse_query
+	mov	w13, #0x2001
+	cmp	w14, w13
+	beq	handle_fuse_query
+
+	/* 6. Boot / SCM Warm Boot Vector (SCM v1 0x0401) */
+	mov	w13, #0x0401
+	cmp	w14, w13
+	beq	forward_to_el3
+
+	/* 7. Default: Attempt safe forward to real EL3 TrustZone */
+	b	forward_to_el3_safe
+
+handle_info_winsecapp:
+	/* Return App ID = 7 (WinSecApp) and Success */
+	mov	x0, xzr			/* Status = 0 (Success) */
+	mov	x1, #7			/* App ID = 7 */
+	b	smc_return
+
+handle_winsecapp_version:
+	/* If response buffer address in x3 is not NULL, populate winsecapp_resp */
+	cbz	x3, 1f
+	str	wzr, [x3, #0]		/* status = 0 (STATUS_SUCCESS) */
+	mov	w15, #1
+	str	w15, [x3, #4]		/* version_major = 1 */
+	mov	w15, #3
+	str	w15, [x3, #8]		/* version_minor = 3 */
+	mov	w15, #7
+	str	w15, [x3, #12]		/* capabilities = 7 (TPM | RPMB | TZASP) */
+	dc	civac, x3		/* clean and invalidate data cache */
+	dsb	sy
+1:
+	mov	x0, xzr
+	mov	x1, xzr
+	b	smc_return
+
+handle_tpm_query:
+	cbz	x3, 1f
+	str	wzr, [x3, #0]		/* status = 0 (SUCCESS) */
+	movz	w15, #0x0000
+	movk	w15, #0x0002, lsl #16
+	str	w15, [x3, #4]		/* tpm_version = 0x00020000 (TPM 2.0) */
+	movz	w15, #0xFFFF
+	movk	w15, #0x00FF, lsl #16
+	str	w15, [x3, #8]		/* pcr_mask = 0x00FFFFFF */
+	dc	civac, x3
+	dsb	sy
+1:
+	mov	x0, xzr
+	mov	x1, xzr
+	b	smc_return
+
+handle_fuse_query:
+	mov	x0, xzr			/* Status = 0 (SUCCESS) */
+	mov	x1, #1			/* Secure Boot Enabled / Authenticated */
+	mov	x2, xzr			/* OEM ID = 0 */
+	b	smc_return
+
+forward_to_el3:
+	/* Forward directly to real EL3 Secure Monitor from EL2 */
+	smc	#0
+	b	smc_return
+
+forward_to_el3_safe:
+	/* Forward to real EL3; sanitize unknown SMC return (-1) to 0 */
+	smc	#0
+	cmp	w0, #-1
+	bne	smc_return
+	mov	x0, xzr
+	b	smc_return
+
+smc_return:
 	/* Advance elr_el2 past the 4-byte smc instruction */
 	mrs	x15, elr_el2
 	add	x15, x15, #4
 	msr	elr_el2, x15
-
-	/* Return 0 (SMCCC_SUCCESS) in w0 */
-	mov	x0, xzr
 	eret
 
 hvc32_stub:

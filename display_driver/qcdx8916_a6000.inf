@@ -1,0 +1,52 @@
+;
+; qcdx8916_a6000.inf
+; Installation file for Qualcomm Display Driver on Lenovo A6000 (MSM8916)
+; Windows Phone 8.1 / Windows 10 Mobile ARM
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Display
+ClassGuid   = {4d36e968-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+DriverVer   = 05/20/2015,1.0.1067.0000
+CatalogFile = qcdx8916_a6000.cat
+
+[Manufacturer]
+%ManufacturerName% = Qualcomm,NTarm
+
+[Qualcomm.NTarm]
+%DeviceDesc% = QCDX_Install, ACPI\QCOM240D
+
+[QCDX_Install]
+CopyFiles = QCDX_Files
+
+[QCDX_Files]
+qcdx8916.sys,,,0x00000040
+
+[QCDX_Install.Services]
+AddService = qcdx8916, 0x00000002, QCDX_Service_Install
+
+[QCDX_Service_Install]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\qcdx8916.sys
+AddReg         = QCDX_SoftwareDeviceSettings
+
+[QCDX_SoftwareDeviceSettings]
+HKR,, "PanelWidth",                0x00010001, 720
+HKR,, "PanelHeight",               0x00010001, 1280
+HKR,, "PanelRefreshRate",          0x00010001, 60
+HKR,, "PanelColorFormat",          0x00010001, 24
+HKR,, "DsiDataLanes",              0x00010001, 4
+HKR,, "PanelInterfaceType",        0x00010001, 1    ; 1 = DSI Video Mode
+HKR,, "ResetGpio",                 0x00010001, 25
+HKR,, "BacklightPwmGpio",          0x00010001, 86
+HKR,, "DefaultFrameBufferAddress", 0x00010001, 0x86000000
+
+[Strings]
+ManufacturerName = "Qualcomm Technologies, Inc."
+DeviceDesc       = "Qualcomm Adreno 306 GPU & Display Subsystem (Lenovo A6000)"
+ServiceDesc      = "Qualcomm Adreno Display Miniport Service"
