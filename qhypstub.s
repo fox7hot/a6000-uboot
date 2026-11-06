@@ -224,13 +224,15 @@ handle_smc32:
 	mov	w14, w0
 
 	/* 1. Standard ARM PSCI calls (0x84000000 - 0x8400001F) */
-	and	w15, w14, #0xFFFF0000
-	mov	w13, #0x84000000
+	movz	w15, #0xFFFF, lsl #16
+	and	w15, w14, w15
+	movz	w13, #0x8400, lsl #16
 	cmp	w15, w13
 	beq	forward_to_el3
 
 	/* 2. SCM_SVC_INFO query "winsecapp" (0x02000601 or SCM v1 0x1801) */
-	mov	w13, #0x02000601
+	movz	w13, #0x0601
+	movk	w13, #0x0200, lsl #16
 	cmp	w14, w13
 	beq	handle_info_winsecapp
 	mov	w13, #0x1801
@@ -238,10 +240,12 @@ handle_smc32:
 	beq	handle_info_winsecapp
 
 	/* 3. WinSecApp Init & Get Version (0x02000201, 0x02000202, or SCM v1 0x3801/0x3802) */
-	mov	w13, #0x02000201
+	movz	w13, #0x0201
+	movk	w13, #0x0200, lsl #16
 	cmp	w14, w13
 	beq	handle_winsecapp_version
-	mov	w13, #0x02000202
+	movz	w13, #0x0202
+	movk	w13, #0x0200, lsl #16
 	cmp	w14, w13
 	beq	handle_winsecapp_version
 	mov	w13, #0x3801
@@ -252,7 +256,8 @@ handle_smc32:
 	beq	handle_winsecapp_version
 
 	/* 4. TPM / fTPM Query (0x02000401 or SCM v1 0x1001) */
-	mov	w13, #0x02000401
+	movz	w13, #0x0401
+	movk	w13, #0x0200, lsl #16
 	cmp	w14, w13
 	beq	handle_tpm_query
 	mov	w13, #0x1001
@@ -260,7 +265,8 @@ handle_smc32:
 	beq	handle_tpm_query
 
 	/* 5. OEM Fuse / Secure Boot State (0x02000801 or SCM v1 0x2001) */
-	mov	w13, #0x02000801
+	movz	w13, #0x0801
+	movk	w13, #0x0200, lsl #16
 	cmp	w14, w13
 	beq	handle_fuse_query
 	mov	w13, #0x2001
