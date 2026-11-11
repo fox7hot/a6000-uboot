@@ -69,30 +69,40 @@ jobs:
             movk  x0, #0x0B01, lsl #16
             str   w1, [x0]
 
-            // 4. Draw Bright Cyan diagnostic banner on linear Framebuffer (0x8e000000)
-            // 720 pixels wide, 120 scanlines deep = 86400 words = 0x15180
+            // 4. Draw Bright Cyan and Yellow diagnostic banner on linear Framebuffer (0x83200000)
+            // Lenovo A6000 Framebuffer is at 0x83200000 (MIPI_FB_ADDR in lk2nd), 720x1280
+            // 720 pixels wide, 200 scanlines Cyan: 0xFF00FFFF (144000 words = 0x23280)
             movz  x0, #0x0000
-            movk  x0, #0x8e00, lsl #16
-            // ARGB Cyan: 0xFF00FFFF
+            movk  x0, #0x8320, lsl #16
             movz  w1, #0xFFFF
             movk  w1, #0x00FF, lsl #16
-            movz  w2, #0x5180
-            movk  w2, #0x0001, lsl #16
+            movz  w2, #0x3280
+            movk  w2, #0x0002, lsl #16
           1:
             str   w1, [x0], #4
             subs  w2, w2, #1
             bne   1b
 
-            // 5. Clean & Invalidate Data Cache for FB range
-            movz  x0, #0x0000
-            movk  x0, #0x8e00, lsl #16
-            movz  w2, #0x4600
-            movk  w2, #0x0005, lsl #16
+            // Next 200 scanlines Yellow: 0xFFFFFF00 (144000 words = 0x23280)
+            movz  w1, #0xFF00
+            movk  w1, #0xFFFF, lsl #16
+            movz  w2, #0x3280
+            movk  w2, #0x0002, lsl #16
           2:
+            str   w1, [x0], #4
+            subs  w2, w2, #1
+            bne   2b
+
+            // 5. Clean & Invalidate Data Cache for FB range (0x83200000 - 0x83584000)
+            movz  x0, #0x0000
+            movk  x0, #0x8320, lsl #16
+            movz  w2, #0x4000
+            movk  w2, #0x0038, lsl #16
+          3:
             dc    civac, x0
             add   x0, x0, #64
             subs  w2, w2, #64
-            bgt   2b
+            bgt   3b
             dsb   sy
             isb
 
@@ -145,7 +155,7 @@ jobs:
             gArmTokenSpaceGuid.PcdSystemMemorySize|0x40000000
             
             # Framebuffer (Lenovo A6000: 720x1280 at 0x8e000000, 32 BPP)
-            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x8e000000
+            gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x83200000
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|720
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|1280
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferPixelBpp|32
@@ -189,24 +199,17 @@ jobs:
           
           # Create extlinux configuration with 32-bit WP8 UEFI as default
           cat << 'EOF' > build_stage/extlinux/extlinux.conf
-          timeout 150
-          default UEFI32_WP8
-          menu title Lenovo A6000 WP8 & UEFI Boot Menu
-
-          label UEFI32_WP8
-          	menu label 1. 32-bit Lumia WP8 UEFI (uefi32.bin)
-          	kernel /uefi32.bin
-          	fdt /dtbs/qcom/msm8916-wingtech-wt86518.dtb
-          	append console=tty0 earlycon lk2nd.debug=1
+          timeout 0
+          default EDK2_A6000
 
           label EDK2_A6000
-          	menu label 2. Tianocore EDK2 64-bit Diagnostic (Lenovo A6000)
+          	menu label Tianocore EDK2 64-bit (Lenovo A6000)
           	kernel /uefi.gz
-          	fdt /dtbs/qcom/msm8916-wingtech-wt86518.dtb
-          	append console=tty0 earlycon lk2nd.debug=1 panic=-1 reboot=p
+          	fdtdir /dtbs
+          	append lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888 lk2nd.pass-ramoops=zap console=tty0 earlycon
           EOF
           
-          mke2fs -t ext2 -F -d build_stage new_thirdstage.ext2 16M
+          mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 12M
           
           # Assemble combined boot image using our custom qhypstub.bin
           cp lk2nd.img a6000_wp8_combined.img
