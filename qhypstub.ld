@@ -7,5 +7,7 @@ SECTIONS {
 	.text : { *(.text) }
 	.rodata : { *(.rodata) }
 	.data : { *(.data) }
+
+	. = 0x86400800;
 	.text.vectab : { *(.text.vectab) }
 }

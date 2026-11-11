@@ -93,16 +93,6 @@ jobs:
             subs  w2, w2, #1
             bne   2b
 
-            // 5. Clean & Invalidate Data Cache for FB range (0x83200000 - 0x83584000)
-            movz  x0, #0x0000
-            movk  x0, #0x8320, lsl #16
-            movz  w2, #0x4000
-            movk  w2, #0x0038, lsl #16
-          3:
-            dc    civac, x0
-            add   x0, x0, #64
-            subs  w2, w2, #64
-            bgt   3b
             dsb   sy
             isb
 
@@ -154,7 +144,7 @@ jobs:
             gArmTokenSpaceGuid.PcdSystemMemoryBase|0x80000000
             gArmTokenSpaceGuid.PcdSystemMemorySize|0x40000000
             
-            # Framebuffer (Lenovo A6000: 720x1280 at 0x8e000000, 32 BPP)
+            # Framebuffer (Lenovo A6000: 720x1280 at 0x83200000, 32 BPP)
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x83200000
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|720
             gMSM8916PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|1280
@@ -174,8 +164,14 @@ jobs:
           aarch64-linux-gnu-ld -T qhypstub.ld -o qhypstub.elf qhypstub.o
           aarch64-linux-gnu-objcopy -O binary qhypstub.elf qhypstub.bin
           ls -la qhypstub.bin
+          SIZE=$(stat -c%s qhypstub.bin)
+          echo "Compiled qhypstub.bin: $SIZE bytes"
+          if [ $SIZE -gt 4096 ]; then
+            echo "ERROR: qhypstub.bin exceeds 4096 bytes!"
+            exit 1
+          fi
 
-      - name: Package with lk2nd and Windows Phone 8 Extlinux
+      - name: Package with lk2nd, U-Boot, EDK2, and Windows Phone 8
         run: |
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/lk2nd.img
           wget https://github.com/msm8916-mainline/gen-uboot-img/releases/download/20250426-v6.15-rc3/thirdstage.ext2
@@ -183,35 +179,60 @@ jobs:
           mkdir -p build_stage
           7z x thirdstage.ext2 -obuild_stage/
           rm -rf build_stage/lost+found
-          rm -f build_stage/u-boot*
           rm -f build_stage/bootaa64.efi.gz
+          
+          # KEEP u-boot-nodtb.bin.gz from thirdstage.ext2 as the proven 64-bit bootloader!
+          ls -la build_stage/u-boot*
           
           # Copy 64-bit diagnostic uefi.gz
           cp uefi.gz build_stage/uefi.gz
           
           # Copy 32-bit UEFI and EFI boot binaries
           cp uefi32.bin build_stage/uefi32.bin
-          cp zImage-uefi build_stage/zImage-uefi
           mkdir -p build_stage/EFI/Boot
           cp bootarm.efi build_stage/EFI/Boot/bootarm.efi
           cp Shell_Arm.efi build_stage/EFI/Boot/shell.efi
           cp Shell_Arm.efi build_stage/shellarm.efi
           
-          # Create extlinux configuration with 32-bit WP8 UEFI as default
+          # Locate and deploy 64-bit Tianocore Shell.efi
+          find edk2-msm8916/workspace/Build -name "Shell.efi" -exec cp {} build_stage/EFI/Boot/bootaa64.efi \; || true
+          find edk2-msm8916/workspace/Build -name "Shell.efi" -exec cp {} build_stage/shell64.efi \; || true
+          
+          # Create automated startup.nsh script for UEFI Shell
+          cat << 'EOF' > build_stage/startup.nsh
+          echo "=== Lenovo A6000 Windows Phone 8 Bootchain ==="
+          echo "Storage devices:"
+          map -r
+          EOF
+          cp build_stage/startup.nsh build_stage/EFI/Boot/startup.nsh
+          
+          # Create extlinux configuration with U-Boot as default
           cat << 'EOF' > build_stage/extlinux/extlinux.conf
-          timeout 0
-          default EDK2_A6000
+          timeout 20
+          default U-Boot
+
+          label U-Boot
+          	menu label 1. U-Boot 2025 Bootloader (Mainline Display + Console)
+          	kernel /u-boot-nodtb.bin.gz
+          	fdtdir /dtbs
+          	append lk2nd.pass-ramoops=zap lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888 console=tty0 earlycon
 
           label EDK2_A6000
-          	menu label Tianocore EDK2 64-bit (Lenovo A6000)
+          	menu label 2. Tianocore EDK2 64-bit Diagnostic
           	kernel /uefi.gz
           	fdtdir /dtbs
-          	append lk2nd.pass-simplefb=relocate,autorefresh,xrgb8888 lk2nd.pass-ramoops=zap console=tty0 earlycon
+          	append lk2nd.pass-simplefb=autorefresh,xrgb8888 lk2nd.pass-ramoops=zap console=tty0 earlycon
+
+          label UEFI32_WP8
+          	menu label 3. Lumia WP8 32-bit UEFI
+          	kernel /uefi32.bin
+          	fdt /dtbs/qcom/msm8916-wingtech-wt86518.dtb
+          	append console=tty0 earlycon
           EOF
           
           mke2fs -t ext2 -b 4096 -F -d build_stage new_thirdstage.ext2 12M
           
-          # Assemble combined boot image using our custom qhypstub.bin
+          # Assemble combined boot image using our custom 4096-byte qhypstub.bin
           cp lk2nd.img a6000_wp8_combined.img
           truncate -s 508K a6000_wp8_combined.img
           cat qhypstub.bin >> a6000_wp8_combined.img
@@ -223,7 +244,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Release ${{ github.run_number }} - Windows Phone 8 & EDK2 Bootloader
+          name: Release ${{ github.run_number }} - Windows Phone 8 & U-Boot & EDK2 Bootchain
           files: |
             uefi.fd
             uefi.gz

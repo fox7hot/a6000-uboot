@@ -161,64 +161,11 @@ finish_smc_switch_aarch64:
 	mrs	lr, elr_el2
 	ret
 
-/* Exception Vectors */
-.section .text.vectab
-.macro excvec label
-	.align 7
-\label:
-.endm
-
-.align	11
-el2_vector_table:
-	excvec	el2_sp0_sync
-	b	panic
-	excvec	el2_sp0_irq
-	b	panic
-	excvec	el2_sp0_fiq
-	b	panic
-	excvec	el2_sp0_serror
-	b	panic
-
-	excvec	el2_sp2_sync
-	b	panic
-	excvec	el2_sp2_irq
-	b	panic
-	excvec	el2_sp2_fiq
-	b	panic
-	excvec	el2_sp2_serror
-	b	panic
-
-	excvec	el1_aarch64_sync
-	mrs	x30, esr_el2
-	lsr	x30, x30, 26
-	cmp	x30, 0b100000
-	beq	finish_smc_switch_aarch64
-	b	panic
-	excvec	el1_aarch64_irq
-	b	panic
-	excvec	el1_aarch64_fiq
-	b	panic
-	excvec	el1_aarch64_serror
-	b	panic
-
-	excvec	el1_aarch32_sync
-	mrs	x15, esr_el2
-	lsr	x15, x15, 26
-	cmp	x15, 0b010011	/* Trapped SMC32 from EL1? */
-	beq	handle_smc32
-	cmp	x15, 0b010010	/* HVC32? */
-	beq	hvc32_stub
-	b	panic
-	excvec	el1_aarch32_irq
-	b	panic
-	excvec	el1_aarch32_fiq
-	b	panic
-	excvec	el1_aarch32_serror
-	b	panic
-
-	excvec	el2_vector_table_end
-
-/* Nokia / Windows Phone TrustZone SMC Emulator & Translator */
+/* =========================================================================
+ * Nokia / Windows Phone TrustZone SMC Emulator & Translator (Inside .text)
+ * Fits cleanly before .text.vectab at 0x86400800
+ * ========================================================================= */
+.global handle_smc32
 handle_smc32:
 	/* w0 holds Function ID / SCM Service ID */
 	mov	w14, w0
@@ -297,8 +244,8 @@ handle_winsecapp_version:
 	str	w15, [x3, #8]		/* version_minor = 3 */
 	mov	w15, #7
 	str	w15, [x3, #12]		/* capabilities = 7 (TPM | RPMB | TZASP) */
-	dc	civac, x3		/* clean and invalidate data cache */
 	dsb	sy
+	isb
 1:
 	mov	x0, xzr
 	mov	x1, xzr
@@ -313,8 +260,8 @@ handle_tpm_query:
 	movz	w15, #0xFFFF
 	movk	w15, #0x00FF, lsl #16
 	str	w15, [x3, #8]		/* pcr_mask = 0x00FFFFFF */
-	dc	civac, x3
 	dsb	sy
+	isb
 1:
 	mov	x0, xzr
 	mov	x1, xzr
@@ -361,4 +308,63 @@ scm_jump_aarch64_args_end:
 
 .section .rodata
 .align	3
-.ascii	"qhypstub-nokia-tz"
+.ascii	"qhypstub"
+
+/* =========================================================================
+ * EL2 Exception Vectors (Must be aligned to 0x800 = 2048 bytes)
+ * ========================================================================= */
+.section .text.vectab
+.macro excvec label
+	.align 7
+\label:
+.endm
+
+.align	11
+el2_vector_table:
+	excvec	el2_sp0_sync
+	b	panic
+	excvec	el2_sp0_irq
+	b	panic
+	excvec	el2_sp0_fiq
+	b	panic
+	excvec	el2_sp0_serror
+	b	panic
+
+	excvec	el2_sp2_sync
+	b	panic
+	excvec	el2_sp2_irq
+	b	panic
+	excvec	el2_sp2_fiq
+	b	panic
+	excvec	el2_sp2_serror
+	b	panic
+
+	excvec	el1_aarch64_sync
+	mrs	x30, esr_el2
+	lsr	x30, x30, 26
+	cmp	x30, 0b100000
+	beq	finish_smc_switch_aarch64
+	b	panic
+	excvec	el1_aarch64_irq
+	b	panic
+	excvec	el1_aarch64_fiq
+	b	panic
+	excvec	el1_aarch64_serror
+	b	panic
+
+	excvec	el1_aarch32_sync
+	mrs	x15, esr_el2
+	lsr	x15, x15, 26
+	cmp	x15, 0b010011	/* Trapped SMC32 from EL1? */
+	beq	handle_smc32
+	cmp	x15, 0b010010	/* HVC32? */
+	beq	hvc32_stub
+	b	panic
+	excvec	el1_aarch32_irq
+	b	panic
+	excvec	el1_aarch32_fiq
+	b	panic
+	excvec	el1_aarch32_serror
+	b	panic
+
+	excvec	el2_vector_table_end
